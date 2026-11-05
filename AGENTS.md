@@ -127,6 +127,7 @@ commit. Grade by behaviour against the incumbent, not by whether a menu item exi
   GitHub profiles). Never hand-edit `contributors.json`.
 
 ## CI workflows
-- Workflows in `.github/workflows/` call the shared workflows in [`storytold/craft-common-actions`](https://github.com/storytold/craft-common-actions) at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
-- Don't add or change CI in a feature or fix PR. If the existing workflows can't build or test a change, link an existing craft-common-actions issue or PR, or open a new issue, or a PR only for a small fix that is safe for every app and does not increase CI time.
-- Some workflow files here still run their own jobs. Don't add to them. Moving a job into craft-common-actions is its own task, never part of another PR, and the job stays here until a shared workflow runs it.
+- This `difof/figcraft` fork builds only the Linux x86_64 headless server/CLI and the browser app.
+- Never reintroduce Windows, macOS, FreeBSD, or other platform/architecture build jobs, including through a shared workflow's implicit matrix.
+- The manually dispatched `release.yml` builds and tests on GitHub-hosted Ubuntu runners and publishes those archives. It intentionally replaces upstream's full-platform release workflow; reuse pinned shared setup actions where useful, not its release matrix.
+- Never compile Rust on the deployment machine. Install only the artifacts built on GitHub Actions. Do not create installation backups; preserve the existing documents and server configuration.

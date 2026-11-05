@@ -1,51 +1,125 @@
-name: Release
+name: Linux and web release
 
 on:
-  push:
-    branches: [release]
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Version override for a test run, e.g. 0.2.0-rc.1 (empty: Cargo.toml)"
-        type: string
-        default: ""
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
+  group: linux-web-release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+  CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+  CRAFT_FONTS_REQUIRED: 1
 
 jobs:
-  release:
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@main
-    with:
-      app-name: figcraft
-      app-title: FigCraft
-      # Combined Latin presentation and core UI catalog. Required web builds enforce
-      # Inter Regular/SemiBold and Noto Sans Georgian Regular after asset-policy filtering.
-      craft-fonts-ref: 37827adc41fd165f9a9234ac40f94dbad353aa69
-      has-server: true
-      # The browser has no system fonts: without craft-fonts the web build can't draw text (#885).
-      # crates/text/build.rs keeps the web allowlist small (Inter and Georgian).
-      web-craft-fonts: true
-      version: ${{ inputs.version }}
-    secrets:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-      AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-      AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
-      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+  linux:
+    name: Linux x86_64 server and CLI
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 37827adc41fd165f9a9234ac40f94dbad353aa69
+          path: craft-fonts
+          persist-credentials: false
+      - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@bb16e4122aea92d09106f2bdea1655f06a07711f
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          shared-key: linux-headless-release
+      - name: Test the comment event regression
+        run: cargo test --release --locked -p figcraft-engine --lib events_tests
+      - name: Build Linux server and CLI
+        run: cargo build --release --locked -p figcraft-server -p figcraft-cli
+      - name: Package and smoke-test the headless binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          . packaging/env.sh
+          packaging/server/package.sh --skip-build
+          NAME="figcraft-cli-$VERSION-linux-x86_64"
+          STAGE="$RUNNER_TEMP/$NAME"
+          mkdir -p "$STAGE/bin" "$STAGE/share/doc/figcraft"
+          install -m 755 target/release/figcraft-cli "$STAGE/bin/figcraft-cli"
+          strip "$STAGE/bin/figcraft-cli"
+          copy_docs "$STAGE/share/doc/figcraft"
+          "$STAGE/bin/figcraft-cli" --version | grep -F "$VERSION"
+          tar -C "$RUNNER_TEMP" -czf "$DIST/$NAME.tar.gz" "$NAME"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux
+          path: dist/release/*.tar.gz
+          if-no-files-found: error
+
+  web:
+    name: WebAssembly browser app
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 37827adc41fd165f9a9234ac40f94dbad353aa69
+          path: craft-fonts
+          persist-credentials: false
+      - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@bb16e4122aea92d09106f2bdea1655f06a07711f
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          shared-key: web-release
+      - uses: storytold/craft-common-actions/actions/install-trunk@bb16e4122aea92d09106f2bdea1655f06a07711f
+        with:
+          trunk-version: 0.21.14
+      - name: Build and package the browser app
+        run: packaging/web/package.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web
+          path: dist/release/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish Linux and web archives
+    needs: [linux, web]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Create the fork release with checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          . packaging/env.sh
+          TAG="v$VERSION"
+          (cd release-assets && sha256sum *.tar.gz *.zip > SHA256SUMS.txt)
+          gh release create "$TAG" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "FigCraft $VERSION (Linux and web)" --latest \
+            --notes "Unofficial difof fork release. Includes upstream PR #1766: browser comment commands use the browser-compatible web_time clock. Built entirely on GitHub-hosted Ubuntu runners. Assets: Linux x86_64 collaboration server, Linux x86_64 headless CLI/MCP, browser app, and SHA-256 checksums. Source commit: $GITHUB_SHA. No Windows, macOS, FreeBSD, desktop GUI, ARM or RISC-V builds."
