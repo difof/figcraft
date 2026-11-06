@@ -2,6 +2,11 @@ name: Linux and web release
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a fork release after successful builds
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,8 +43,29 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           shared-key: linux-headless-release
-      - name: Test the comment event regression
-        run: cargo test --release --locked -p figcraft-engine --lib events_tests
+      - name: Check reconnect formatting
+        run: rustfmt --edition 2024 --check crates/collab-net/src/join.rs crates/collab-net/src/driver_tests.rs crates/engine/src/collab_live_tests.rs
+      - name: Lint collaboration crates
+        run: cargo clippy --release --locked -p figcraft-collab -p figcraft-collab-net --lib --tests -- -D warnings
+      - name: Test collaboration and transports
+        run: cargo test --release --locked -p figcraft-collab -p figcraft-collab-net --lib
+      - name: Test queued edits, comments and event clocks
+        run: |
+          cargo test --release --locked -p figcraft-engine --lib collab_live_tests
+          cargo test --release --locked -p figcraft-engine --lib events_tests
+      - name: Prove the long-outage regression fails before the fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp crates/collab-net/src/join.rs "$RUNNER_TEMP/join-fixed.rs"
+          trap 'cp "$RUNNER_TEMP/join-fixed.rs" crates/collab-net/src/join.rs' EXIT
+          git show f05e5684987ce2501dbfada35afff41283505229:crates/collab-net/src/join.rs > crates/collab-net/src/join.rs
+          if cargo test --release --locked -p figcraft-collab-net --lib driver_tests::default_retries_survive_a_long_outage_and_reset_after_welcome -- --exact > "$RUNNER_TEMP/reconnect-before.log" 2>&1; then
+            cat "$RUNNER_TEMP/reconnect-before.log"
+            echo "error: the regression unexpectedly passed before the fix" >&2
+            exit 1
+          fi
+          grep -F 'gave up at attempt 13' "$RUNNER_TEMP/reconnect-before.log"
       - name: Build Linux server and CLI
         run: cargo build --release --locked -p figcraft-server -p figcraft-cli
       - name: Package and smoke-test the headless binaries
@@ -97,6 +123,7 @@ jobs:
 
   publish:
     name: Publish Linux and web archives
+    if: ${{ inputs.publish }}
     needs: [linux, web]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
