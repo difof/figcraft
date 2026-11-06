@@ -59,6 +59,7 @@ jobs:
           set -euo pipefail
           cp crates/collab-net/src/join.rs "$RUNNER_TEMP/join-fixed.rs"
           trap 'cp "$RUNNER_TEMP/join-fixed.rs" crates/collab-net/src/join.rs' EXIT
+          git fetch --no-tags --depth=1 origin f05e5684987ce2501dbfada35afff41283505229
           git show f05e5684987ce2501dbfada35afff41283505229:crates/collab-net/src/join.rs > crates/collab-net/src/join.rs
           if cargo test --release --locked -p figcraft-collab-net --lib driver_tests::default_retries_survive_a_long_outage_and_reset_after_welcome -- --exact > "$RUNNER_TEMP/reconnect-before.log" 2>&1; then
             cat "$RUNNER_TEMP/reconnect-before.log"
